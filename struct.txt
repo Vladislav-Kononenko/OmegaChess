@@ -1,0 +1,19 @@
+/omega_chess/
+├── CMakeLists.txt
+├── src/
+│   ├── main.cpp
+│   ├── logic/
+│   │   ├── Board.hpp/Board.cpp
+│   │   ├── Piece.hpp/… etc
+│   ├── gui/
+│   │   ├── BoardView.hpp/BoardView.cpp
+│   │   ├── MainWindow.hpp/… etc
+│   └── controller/
+│       ├── GameController.hpp/…
+├── resources/
+│   ├── images/
+│   │   ├── pieces/*.png
+│   └── styles/
+├── tests/
+│   └── logic_tests.cpp
+└── README.md
