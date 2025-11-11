@@ -1,12 +1,12 @@
-// GameController.hpp
 #pragma once
 
 #include <QObject>
 #include <vector>
 #include <cstddef>
 
-class Board;    // модель доски (Omega-шахматы)
+class Board;
 
+/// Простейшая координата на доске
 struct Position
 {
     int row = 0;
@@ -16,6 +16,7 @@ struct Position
     Position(int r, int c) : row(r), col(c) {}
 };
 
+/// Описание хода: из клетки в клетку
 struct Move
 {
     Position from;
@@ -50,9 +51,9 @@ public:
     bool makeMove(const Position &from, const Position &to);
     bool makeMove(const Move &move);
 
-    Player currentPlayer() const noexcept;
-    GameState gameState() const noexcept;
-    const Board& board() const;
+    Player     currentPlayer() const noexcept;
+    GameState  gameState()     const noexcept;
+    const Board& board()       const;
 
     bool canUndo() const noexcept;
     bool canRedo() const noexcept;
@@ -61,8 +62,8 @@ public slots:
     void undo();
     void redo();
 
-    signals:
-        void boardChanged();
+signals:
+    void boardChanged();
     void currentPlayerChanged(GameController::Player player);
     void gameStateChanged(GameController::GameState state);
     void moveMade(const Move &move);
@@ -70,18 +71,24 @@ public slots:
     void redoAvailabilityChanged(bool canRedo);
 
 private:
+    // Служебные методы
     void switchPlayer();
     void updateGameState();
     void notifyHistoryChanged();
 
-    /// ВАЖНО: добавили объявление
+    // Применить ход к доске (без истории, без смены игрока)
     bool applyMoveOnBoard(const Move &move);
+
+    // --- НОВОЕ: логика шаха ---
+    bool isKingInCheck(Player side) const;                   // король side под ударом?
+    bool isSquareAttacked(int row, int col, Player bySide) const; // клетка под атакой стороны bySide?
 
 private:
     Board *m_board = nullptr;
-    Player m_currentPlayer = Player::White;
-    GameState m_gameState  = GameState::Running;
+
+    Player    m_currentPlayer = Player::White;
+    GameState m_gameState     = GameState::Running;
 
     std::vector<Move> m_history;
-    std::size_t m_historyIndex = 0;
+    std::size_t       m_historyIndex = 0;
 };

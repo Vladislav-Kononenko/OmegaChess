@@ -5,78 +5,182 @@
 
 #include <algorithm>
 
-// Вспомогательный внутренний метод: применить ход к доске БЕЗ
-// изменения истории, смены игрока и т.п.
-// Здесь пока нет полной проверки легальности по правилам Omega-шахмат –
-// только базовые проверки: валидность клеток, наличие фигуры,
-// правильный цвет, запрет рубить свои фигуры.
-bool GameController::applyMoveOnBoard(const Move &move)
+// Вспомогательная функция: цвет по игроку
+static PieceColor colorOf(GameController::Player p)
 {
-    if (!m_board)
-        return false;
-
-    Board &board = *m_board;
-
-    const int fromRow = move.from.row;
-    const int fromCol = move.from.col;
-    const int toRow   = move.to.row;
-    const int toCol   = move.to.col;
-
-    // Координаты в пределах массива
-    if (!board.isInsideArray(fromRow, fromCol) ||
-        !board.isInsideArray(toRow, toCol))
-    {
-        return false;
-    }
-
-    // Клетки должны быть валидными для геометрии Omega-доски
-    if (!board.isValidCell(fromRow, fromCol) ||
-        !board.isValidCell(toRow, toCol))
-    {
-        return false;
-    }
-
-    Piece fromPiece = board.pieceAt(fromRow, fromCol);
-    if (fromPiece.isEmpty())
-    {
-        // С пустой клетки ходить нельзя
-        return false;
-    }
-
-    // Ходить можно только своей фигурой
-    if ((m_currentPlayer == Player::White && fromPiece.color != PieceColor::White) ||
-        (m_currentPlayer == Player::Black && fromPiece.color != PieceColor::Black))
-    {
-        return false;
-    }
-
-    Piece toPiece = board.pieceAt(toRow, toCol);
-
-    // Нельзя рубить свою фигуру
-    if (!toPiece.isEmpty() && toPiece.color == fromPiece.color)
-    {
-        return false;
-    }
-
-    // >>> НОВОЕ ПРАВИЛО: короля бить нельзя
-    if (!toPiece.isEmpty() && toPiece.kind == PieceKind::King)
-    {
-        // В Omega/шахматах король не снимается с доски, партия
-        // должна заканчиваться матом, а не взятием.
-        return false;
-    }
-
-    // TODO: сюда позже добавим полную проверку легальности хода
-    // (по типу фигуры, шах/само-шах, рокировка и т.п.).
-
-    // Перемещаем фигуру
-    fromPiece.hasMoved = true;
-    board.setPieceAt(toRow, toCol, fromPiece);
-    board.clearCell(fromRow, fromCol);
-
-    return true;
+    return (p == GameController::Player::White)
+           ? PieceColor::White
+           : PieceColor::Black;
 }
 
+// Вспомогательная функция: противоположный игрок
+static GameController::Player opposite(GameController::Player p)
+{
+    return (p == GameController::Player::White)
+           ? GameController::Player::Black
+           : GameController::Player::White;
+}
+
+// Проверка: фигура p с клетки (pr,pc) атакует ли клетку (tr,tc)?
+// Используем реальные шаблоны ходов Omega Chess (король, ферзь, ладья, слон, конь, пешка,
+// чемпион, волшебник). Для пешек учитываем только шаблон взятия.
+static bool pieceAttacksSquare(const Board &board,
+                               const Piece &p,
+                               int pr, int pc,
+                               int tr, int tc)
+{
+    if (p.isEmpty())
+        return false;
+
+    const int dr = tr - pr;
+    const int dc = tc - pc;
+
+    auto sameSign = [](int x, int y) {
+        return (x == 0 || y == 0) ? false : ( (x > 0) == (y > 0) );
+    };
+
+    // ---------------- ПЕШКА ----------------
+    if (p.kind == PieceKind::Pawn)
+    {
+        if (p.color == PieceColor::White)
+        {
+            // Белые бьют вверх (в сторону меньших row)
+            return (dr == -1 && (dc == -1 || dc == 1));
+        }
+        else if (p.color == PieceColor::Black)
+        {
+            // Чёрные бьют вниз (в сторону больших row)
+            return (dr == 1 && (dc == -1 || dc == 1));
+        }
+        return false;
+    }
+
+    // ---------------- КОНЬ ----------------
+    if (p.kind == PieceKind::Knight)
+    {
+        const int adr = std::abs(dr);
+        const int adc = std::abs(dc);
+        return (adr == 1 && adc == 2) || (adr == 2 && adc == 1);
+    }
+
+    // ---------------- КОРОЛЬ ----------------
+    if (p.kind == PieceKind::King)
+    {
+        return std::max(std::abs(dr), std::abs(dc)) == 1;
+    }
+
+    // ---------------- ЛАДЬЯ / ФЕРЗЬ (по прямым) ----------------
+    auto rookLikeAttacks = [&](void) -> bool
+    {
+        if (dr != 0 && dc != 0)
+            return false;
+
+        int stepR = (dr == 0) ? 0 : (dr > 0 ? 1 : -1);
+        int stepC = (dc == 0) ? 0 : (dc > 0 ? 1 : -1);
+
+        int r = pr + stepR;
+        int c = pc + stepC;
+        while (board.isInsideArray(r, c) && board.isValidCell(r, c))
+        {
+            if (r == tr && c == tc)
+                return true;
+
+            if (!board.isEmpty(r, c))
+                break;
+
+            r += stepR;
+            c += stepC;
+        }
+        return false;
+    };
+
+    // ---------------- СЛОН / ФЕРЗЬ (по диагоналям) ----------------
+    auto bishopLikeAttacks = [&](void) -> bool
+    {
+        if (std::abs(dr) != std::abs(dc) || dr == 0)
+            return false;
+
+        int stepR = (dr > 0 ? 1 : -1);
+        int stepC = (dc > 0 ? 1 : -1);
+
+        int r = pr + stepR;
+        int c = pc + stepC;
+        while (board.isInsideArray(r, c) && board.isValidCell(r, c))
+        {
+            if (r == tr && c == tc)
+                return true;
+
+            if (!board.isEmpty(r, c))
+                break;
+
+            r += stepR;
+            c += stepC;
+        }
+        return false;
+    };
+
+    // ---------------- CHAMPION ----------------
+    // Champion: может прыгать на 2 клетки по прямым или диагоналям, либо
+    // шагнуть на 1 клетку по прямой (WAD в Betza нотации).
+    if (p.kind == PieceKind::Champion)
+    {
+        const int adr = std::abs(dr);
+        const int adc = std::abs(dc);
+
+        // Одноклеточный ход по вертикали/горизонтали
+        if ((adr == 1 && adc == 0) || (adr == 0 && adc == 1))
+            return true;
+
+        // Двухклеточный прыжок по вертикали/горизонтали
+        if ((adr == 2 && adc == 0) || (adr == 0 && adc == 2))
+            return true;
+
+        // Двухклеточный прыжок по диагонали
+        if (adr == 2 && adc == 2)
+            return true;
+
+        return false;
+    }
+
+    // ---------------- WIZARD ----------------
+    // Wizard: может ходить на 1 по диагонали, либо «растянутый конь»:
+    // (1,3) или (3,1) в любом направлении. Все ходы — прыжки.
+    if (p.kind == PieceKind::Wizard)
+    {
+        const int adr = std::abs(dr);
+        const int adc = std::abs(dc);
+
+        // Один шаг по диагонали
+        if (adr == 1 && adc == 1)
+            return true;
+
+        // «верблюдовый» скачок 1x3
+        if ((adr == 1 && adc == 3) || (adr == 3 && adc == 1))
+            return true;
+
+        return false;
+    }
+
+    // ---------------- ЛАДЬЯ ----------------
+    if (p.kind == PieceKind::Rook)
+    {
+        return rookLikeAttacks();
+    }
+
+    // ---------------- СЛОН ----------------
+    if (p.kind == PieceKind::Bishop)
+    {
+        return bishopLikeAttacks();
+    }
+
+    // ---------------- ФЕРЗЬ ----------------
+    if (p.kind == PieceKind::Queen)
+    {
+        return rookLikeAttacks() || bishopLikeAttacks();
+    }
+
+    return false;
+}
 
 // ---------------------------------------------------------------------
 // Конструктор / деструктор
@@ -90,7 +194,6 @@ GameController::GameController(QObject *parent)
     , m_history()
     , m_historyIndex(0)
 {
-    // Начальное состояние
     startNewGame();
 }
 
@@ -109,7 +212,6 @@ void GameController::startNewGame()
     if (!m_board)
         m_board = new Board;
 
-    // Сбрасываем фигуры и состояние
     m_board->resetToInitialPosition();
     m_currentPlayer = Player::White;
     m_gameState     = GameState::Running;
@@ -125,7 +227,6 @@ void GameController::startNewGame()
 
 void GameController::resetToInitialPosition()
 {
-    // По сути то же самое, что startNewGame(), но без изменения истории
     if (!m_board)
         return;
 
@@ -151,14 +252,23 @@ bool GameController::makeMove(const Move &move)
     if (!m_board)
         return false;
 
-    // Сначала пробуем применить ход к текущему состоянию доски (без учёта истории)
+    // Сохраняем состояние доски перед попыткой хода
+    Board  oldBoard       = *m_board;
+    Player movingSide     = m_currentPlayer;
+
+    // Пробуем применить ход к доске (проверка границ, своих/чужих фигур и т.п.)
     if (!applyMoveOnBoard(move))
         return false;
 
-    // Ход оказался допустим (на уровне текущих проверок),
-    // теперь обновляем историю и состояние контроллера.
+    // НОВОЕ: ход не должен оставлять собственного короля под ударом
+    if (isKingInCheck(movingSide))
+    {
+        // Откат доски
+        *m_board = oldBoard;
+        return false;
+    }
 
-    // Если до этого были сделаны undo, нужно обрезать "хвост" истории
+    // Если до этого были сделаны undo, обрежем «хвост» истории
     if (m_historyIndex < m_history.size())
     {
         m_history.erase(m_history.begin() + static_cast<std::ptrdiff_t>(m_historyIndex),
@@ -168,10 +278,10 @@ bool GameController::makeMove(const Move &move)
     m_history.push_back(move);
     ++m_historyIndex;
 
-    // Смена игрока
+    // Переход хода к сопернику
     switchPlayer();
 
-    // Пересчёт состояния (пока stub)
+    // Обновляем состояние игры (проверяем, не находится ли теперь соперник под шахом)
     updateGameState();
 
     emit moveMade(move);
@@ -194,7 +304,7 @@ GameController::GameState GameController::gameState() const noexcept
 
 const Board &GameController::board() const
 {
-    static Board dummy; // на случай, если m_board == nullptr (не должен случаться)
+    static Board dummy;
     return m_board ? *m_board : dummy;
 }
 
@@ -209,7 +319,7 @@ bool GameController::canRedo() const noexcept
 }
 
 // ---------------------------------------------------------------------
-// Слоты undo / redo
+// Undo / Redo
 // ---------------------------------------------------------------------
 
 void GameController::undo()
@@ -217,20 +327,16 @@ void GameController::undo()
     if (!m_board || !canUndo())
         return;
 
-    // Один шаг назад в истории
+    // Один шаг назад
     --m_historyIndex;
 
-    // Восстанавливаем доску: берём начальную позицию и
-    // последовательно накатываем первые m_historyIndex ходов.
-
+    // Восстанавливаем позицию: с нуля применяем первые m_historyIndex ходов
     m_board->resetToInitialPosition();
-    m_currentPlayer = Player::White;   // в начале всегда ход белых
+    m_currentPlayer = Player::White;
 
     for (std::size_t i = 0; i < m_historyIndex; ++i)
     {
         const Move &mv = m_history[i];
-        // При "переигрывании" ходов мы не хотим снова менять историю,
-        // поэтому вызываем только низкоуровневый метод.
         applyMoveOnBoard(mv);
         switchPlayer();
     }
@@ -247,13 +353,10 @@ void GameController::redo()
     if (!m_board || !canRedo())
         return;
 
-    // Применяем следующий ход в истории к доске
     const Move &mv = m_history[m_historyIndex];
 
     if (!applyMoveOnBoard(mv))
     {
-        // Если вдруг не удалось (не должно происходить при корректной истории),
-        // просто выходим.
         return;
     }
 
@@ -268,25 +371,178 @@ void GameController::redo()
 }
 
 // ---------------------------------------------------------------------
-// Внутренние методы
+// Низкоуровневое применение хода
+// ---------------------------------------------------------------------
+
+bool GameController::applyMoveOnBoard(const Move &move)
+{
+    if (!m_board)
+        return false;
+
+    Board &board = *m_board;
+
+    const int fromRow = move.from.row;
+    const int fromCol = move.from.col;
+    const int toRow   = move.to.row;
+    const int toCol   = move.to.col;
+
+    if (!board.isInsideArray(fromRow, fromCol) ||
+        !board.isInsideArray(toRow, toCol))
+    {
+        return false;
+    }
+
+    if (!board.isValidCell(fromRow, fromCol) ||
+        !board.isValidCell(toRow, toCol))
+    {
+        return false;
+    }
+
+    Piece fromPiece = board.pieceAt(fromRow, fromCol);
+    if (fromPiece.isEmpty())
+    {
+        return false;
+    }
+
+    // Ходим только своей фигурой
+    if ((m_currentPlayer == Player::White && fromPiece.color != PieceColor::White) ||
+        (m_currentPlayer == Player::Black && fromPiece.color != PieceColor::Black))
+    {
+        return false;
+    }
+
+    Piece toPiece = board.pieceAt(toRow, toCol);
+
+    // Нельзя бить свою фигуру
+    if (!toPiece.isEmpty() && toPiece.color == fromPiece.color)
+    {
+        return false;
+    }
+
+    // Нельзя «снимать» короля противника
+    if (!toPiece.isEmpty() && toPiece.kind == PieceKind::King)
+    {
+        return false;
+    }
+
+    // TODO: здесь можно добавить полную проверку допустимости хода
+    // по типу фигуры (в данный момент допускается любой "псевдолегальный" ход).
+
+    fromPiece.hasMoved = true;
+    board.setPieceAt(toRow, toCol, fromPiece);
+    board.clearCell(fromRow, fromCol);
+
+    return true;
+}
+
+// ---------------------------------------------------------------------
+// Логика шаха
+// ---------------------------------------------------------------------
+
+bool GameController::isKingInCheck(Player side) const
+{
+    if (!m_board)
+        return false;
+
+    const Board &board = *m_board;
+    const PieceColor myColor   = colorOf(side);
+    const Player     enemySide = opposite(side);
+
+    int kingRow = -1;
+    int kingCol = -1;
+
+    // Ищем короля данной стороны
+    for (int r = 0; r < Board::ROWS; ++r)
+    {
+        for (int c = 0; c < Board::COLS; ++c)
+        {
+            if (!board.isValidCell(r, c))
+                continue;
+
+            const Piece &p = board.pieceAt(r, c);
+            if (p.isEmpty())
+                continue;
+
+            if (p.kind == PieceKind::King && p.color == myColor)
+            {
+                kingRow = r;
+                kingCol = c;
+                break;
+            }
+        }
+        if (kingRow != -1)
+            break;
+    }
+
+    if (kingRow == -1)
+    {
+        // Теоретически этого быть не должно (мы запрещаем взятие короля),
+        // но на всякий случай считаем, что король "под бесконечным шахом".
+        return true;
+    }
+
+    return isSquareAttacked(kingRow, kingCol, enemySide);
+}
+
+bool GameController::isSquareAttacked(int row, int col, Player bySide) const
+{
+    if (!m_board)
+        return false;
+
+    const Board &board = *m_board;
+    const PieceColor attackColor = colorOf(bySide);
+
+    for (int r = 0; r < Board::ROWS; ++r)
+    {
+        for (int c = 0; c < Board::COLS; ++c)
+        {
+            if (!board.isValidCell(r, c))
+                continue;
+
+            const Piece &p = board.pieceAt(r, c);
+            if (p.isEmpty() || p.color != attackColor)
+                continue;
+
+            if (pieceAttacksSquare(board, p, r, c, row, col))
+                return true;
+        }
+    }
+
+    return false;
+}
+
+// ---------------------------------------------------------------------
+// Внутренние служебные методы
 // ---------------------------------------------------------------------
 
 void GameController::switchPlayer()
 {
-    m_currentPlayer = (m_currentPlayer == Player::White)
-                        ? Player::Black
-                        : Player::White;
+    m_currentPlayer = opposite(m_currentPlayer);
 }
 
 void GameController::updateGameState()
 {
-    // TODO: Реализовать анализ позиции:
-    //  - находит ли король текущего игрока под шахом;
-    //  - есть ли допустимые ходы;
-    //  - различать состояния: Running / Check / Checkmate / Stalemate.
+    if (!m_board)
+    {
+        m_gameState = GameState::Running;
+        emit gameStateChanged(m_gameState);
+        return;
+    }
+
+    // Здесь трактуем gameState так:
+    //  - Running: король стороны, которой сейчас ходить, НЕ под шахом
+    //  - Check:   король стороны, которой сейчас ходить, ПОД шахом
     //
-    // Пока просто считаем, что игра идёт без шахов и матов.
-    m_gameState = GameState::Running;
+    // Мат/пат пока не определяем (это потребует полного генератора ходов).
+
+    if (isKingInCheck(m_currentPlayer))
+    {
+        m_gameState = GameState::Check;
+    }
+    else
+    {
+        m_gameState = GameState::Running;
+    }
 
     emit gameStateChanged(m_gameState);
 }
