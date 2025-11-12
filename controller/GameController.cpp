@@ -182,6 +182,69 @@ static bool pieceAttacksSquare(const Board &board,
     return false;
 }
 
+// Проверка: может ли фигура p с клетки (fr,fc) пойти на (tr,tc)
+// с учётом типа хода (взятие / не взятие).
+// Здесь мы проверяем только "псевдолегальность":
+//  - шаблон хода по типу фигуры,
+//  - отсутствие фигур на пути для скользящих фигур (это уже делает pieceAttacksSquare).
+// Проверка шаха/само-шаха выполняется отдельно.
+static bool pieceCanMove(const Board &board,
+                         const Piece &p,
+                         int fr, int fc,
+                         int tr, int tc,
+                         bool isCapture)
+{
+    if (p.isEmpty())
+        return false;
+
+    if (fr == tr && fc == tc)
+        return false;
+
+    const int dr = tr - fr;
+    const int dc = tc - fc;
+
+    // ----------- Пешка (особая логика) -----------
+    if (p.kind == PieceKind::Pawn)
+    {
+        if (isCapture)
+        {
+            // Взятие пешкой: используем шаблон атак
+            return pieceAttacksSquare(board, p, fr, fc, tr, tc);
+        }
+        else
+        {
+            // Тихий ход пешки: строго вперёд на одну клетку
+            if (dc != 0)
+                return false;
+
+            if (p.color == PieceColor::White)
+            {
+                // Белые идут "вверх": уменьшение row
+                if (dr != -1)
+                    return false;
+            }
+            else if (p.color == PieceColor::Black)
+            {
+                // Чёрные идут "вниз": увеличение row
+                if (dr != 1)
+                    return false;
+            }
+            else
+            {
+                return false;
+            }
+
+            // Клетка назначения уже гарантированно пустая по логике вызова
+            return true;
+        }
+    }
+
+    // ----------- Все остальные фигуры -----------
+    // Для короля, ферзя, ладьи, слона, коня, чемпиона, волшебника:
+    // ходы (и взятия, и тихие) должны соответствовать шаблонам атак.
+    return pieceAttacksSquare(board, p, fr, fc, tr, tc);
+}
+
 // ---------------------------------------------------------------------
 // Конструктор / деструктор
 // ---------------------------------------------------------------------
@@ -386,12 +449,14 @@ bool GameController::applyMoveOnBoard(const Move &move)
     const int toRow   = move.to.row;
     const int toCol   = move.to.col;
 
+    // Координаты в пределах массива
     if (!board.isInsideArray(fromRow, fromCol) ||
         !board.isInsideArray(toRow, toCol))
     {
         return false;
     }
 
+    // Клетки должны быть валидными для геометрии Omega-доски
     if (!board.isValidCell(fromRow, fromCol) ||
         !board.isValidCell(toRow, toCol))
     {
@@ -401,10 +466,11 @@ bool GameController::applyMoveOnBoard(const Move &move)
     Piece fromPiece = board.pieceAt(fromRow, fromCol);
     if (fromPiece.isEmpty())
     {
+        // С пустой клетки ходить нельзя
         return false;
     }
 
-    // Ходим только своей фигурой
+    // Ходить можно только своей фигурой
     if ((m_currentPlayer == Player::White && fromPiece.color != PieceColor::White) ||
         (m_currentPlayer == Player::Black && fromPiece.color != PieceColor::Black))
     {
@@ -413,20 +479,28 @@ bool GameController::applyMoveOnBoard(const Move &move)
 
     Piece toPiece = board.pieceAt(toRow, toCol);
 
-    // Нельзя бить свою фигуру
+    // Нельзя рубить свою фигуру
     if (!toPiece.isEmpty() && toPiece.color == fromPiece.color)
     {
         return false;
     }
 
-    // Нельзя «снимать» короля противника
-    if (!toPiece.isEmpty() && toPiece.kind == PieceKind::King)
+    const bool isCapture = !toPiece.isEmpty();
+
+    // Нельзя "снимать" короля противника — партия должна заканчиваться матом.
+    if (isCapture && toPiece.kind == PieceKind::King)
     {
         return false;
     }
 
-    // TODO: здесь можно добавить полную проверку допустимости хода
-    // по типу фигуры (в данный момент допускается любой "псевдолегальный" ход).
+    // НОВОЕ: проверяем шаблоны ходов по типу фигуры
+    if (!pieceCanMove(board, fromPiece, fromRow, fromCol, toRow, toCol, isCapture))
+    {
+        return false;
+    }
+
+    // На этом уровне ход считается псевдолегальным (по типу фигуры).
+    // Проверка "сам себе шах" выполняется в makeMove() через isKingInCheck().
 
     fromPiece.hasMoved = true;
     board.setPieceAt(toRow, toCol, fromPiece);
