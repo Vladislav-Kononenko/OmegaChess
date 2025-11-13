@@ -11,8 +11,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
 
     // Базовая информация о приложении
-    QCoreApplication::setOrganizationName("YourOrgName");
-    QCoreApplication::setOrganizationDomain("example.com");
+    QCoreApplication::setOrganizationName("Vladislav Kononenko");
     QCoreApplication::setApplicationName("Omega Chess");
     QCoreApplication::setApplicationVersion("0.1.0");
 
