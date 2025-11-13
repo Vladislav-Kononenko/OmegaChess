@@ -203,46 +203,204 @@ static bool pieceCanMove(const Board &board,
     const int dr = tr - fr;
     const int dc = tc - fc;
 
-    // ----------- Пешка (особая логика) -----------
+    // --- Пешка ---
     if (p.kind == PieceKind::Pawn)
     {
+        // Взятие пешкой: как в шахматах (на одну диагональ вперёд)
         if (isCapture)
         {
-            // Взятие пешкой: используем шаблон атак
             return pieceAttacksSquare(board, p, fr, fc, tr, tc);
         }
         else
         {
-            // Тихий ход пешки: строго вперёд на одну клетку
+            // Тихий ход: только вперёд по вертикали
             if (dc != 0)
                 return false;
 
+            const int WHITE_PAWN_START_ROW = 9;  // белые пешки стоят на 9-й горизонтали
+            const int BLACK_PAWN_START_ROW = 2;  // чёрные пешки стоят на 2-й горизонтали
+
             if (p.color == PieceColor::White)
             {
-                // Белые идут "вверх": уменьшение row
-                if (dr != -1)
+                // Белые идут вверх (уменьшение row)
+                if (dr >= 0) // не вперёд
                     return false;
+
+                const int steps = -dr; // 1,2,3
+
+                // После первого хода — только по 1
+                if (p.hasMoved)
+                {
+                    if (steps != 1)
+                        return false;
+                }
+                else
+                {
+                    // Первый ход: только с начальной горизонтали и на 1..3 клетки
+                    if (fr != WHITE_PAWN_START_ROW)
+                        return false;
+
+                    if (steps < 1 || steps > 3)
+                        return false;
+                }
+
+                // Проверяем, что все клетки по пути пусты
+                for (int k = 1; k <= -dr; ++k)
+                {
+                    const int r = fr - k;
+                    if (!board.isInsideArray(r, fc) || !board.isValidCell(r, fc))
+                        return false;
+                    if (!board.isEmpty(r, fc))
+                        return false;
+                }
+
+                return true;
             }
             else if (p.color == PieceColor::Black)
             {
-                // Чёрные идут "вниз": увеличение row
-                if (dr != 1)
+                // Чёрные идут вниз (увеличение row)
+                if (dr <= 0)
                     return false;
-            }
-            else
-            {
-                return false;
+
+                const int steps = dr; // 1,2,3
+
+                if (p.hasMoved)
+                {
+                    if (steps != 1)
+                        return false;
+                }
+                else
+                {
+                    if (fr != BLACK_PAWN_START_ROW)
+                        return false;
+
+                    if (steps < 1 || steps > 3)
+                        return false;
+                }
+
+                for (int k = 1; k <= dr; ++k)
+                {
+                    const int r = fr + k;
+                    if (!board.isInsideArray(r, fc) || !board.isValidCell(r, fc))
+                        return false;
+                    if (!board.isEmpty(r, fc))
+                        return false;
+                }
+
+                return true;
             }
 
-            // Клетка назначения уже гарантированно пустая по логике вызова
-            return true;
+            return false;
         }
     }
 
-    // ----------- Все остальные фигуры -----------
-    // Для короля, ферзя, ладьи, слона, коня, чемпиона, волшебника:
-    // ходы (и взятия, и тихие) должны соответствовать шаблонам атак.
-    return pieceAttacksSquare(board, p, fr, fc, tr, tc);
+    // --- Конь ---
+    if (p.kind == PieceKind::Knight)
+    {
+        const int adr = std::abs(dr);
+        const int adc = std::abs(dc);
+        return (adr == 1 && adc == 2) || (adr == 2 && adc == 1);
+    }
+
+    // --- Король (обычные ходы, без рокировки) ---
+    if (p.kind == PieceKind::King)
+    {
+        return std::max(std::abs(dr), std::abs(dc)) == 1;
+    }
+
+    // --- Вспомогательные лямбды для ладьи/слона/ферзя ---
+    auto rookLikeAttacks = [&](void) -> bool
+    {
+        if (dr != 0 && dc != 0)
+            return false;
+
+        int stepR = (dr == 0) ? 0 : (dr > 0 ? 1 : -1);
+        int stepC = (dc == 0) ? 0 : (dc > 0 ? 1 : -1);
+
+        int r = fr + stepR;
+        int c = fc + stepC;
+        while (board.isInsideArray(r, c) && board.isValidCell(r, c))
+        {
+            if (r == tr && c == tc)
+                return true;
+
+            if (!board.isEmpty(r, c))
+                break;
+
+            r += stepR;
+            c += stepC;
+        }
+        return false;
+    };
+
+    auto bishopLikeAttacks = [&](void) -> bool
+    {
+        if (std::abs(dr) != std::abs(dc) || dr == 0)
+            return false;
+
+        int stepR = (dr > 0 ? 1 : -1);
+        int stepC = (dc > 0 ? 1 : -1);
+
+        int r = fr + stepR;
+        int c = fc + stepC;
+        while (board.isInsideArray(r, c) && board.isValidCell(r, c))
+        {
+            if (r == tr && c == tc)
+                return true;
+
+            if (!board.isEmpty(r, c))
+                break;
+
+            r += stepR;
+            c += stepC;
+        }
+        return false;
+    };
+
+    // --- Champion ---
+    if (p.kind == PieceKind::Champion)
+    {
+        const int adr = std::abs(dr);
+        const int adc = std::abs(dc);
+
+        if ((adr == 1 && adc == 0) || (adr == 0 && adc == 1))
+            return true; // шаг по ортогонали
+
+        if ((adr == 2 && adc == 0) || (adr == 0 && adc == 2))
+            return true; // прыжок по ортогонали
+
+        if (adr == 2 && adc == 2)
+            return true; // прыжок по диагонали
+
+        return false;
+    }
+
+    // --- Wizard ---
+    if (p.kind == PieceKind::Wizard)
+    {
+        const int adr = std::abs(dr);
+        const int adc = std::abs(dc);
+
+        if (adr == 1 && adc == 1)
+            return true; // шаг по диагонали
+
+        if ((adr == 1 && adc == 3) || (adr == 3 && adc == 1))
+            return true; // "верблюдовый" прыжок
+
+        return false;
+    }
+
+    // --- Ладья / слон / ферзь ---
+    if (p.kind == PieceKind::Rook)
+        return rookLikeAttacks();
+
+    if (p.kind == PieceKind::Bishop)
+        return bishopLikeAttacks();
+
+    if (p.kind == PieceKind::Queen)
+        return rookLikeAttacks() || bishopLikeAttacks();
+
+    return false;
 }
 
 // ---------------------------------------------------------------------
@@ -449,14 +607,12 @@ bool GameController::applyMoveOnBoard(const Move &move)
     const int toRow   = move.to.row;
     const int toCol   = move.to.col;
 
-    // Координаты в пределах массива
     if (!board.isInsideArray(fromRow, fromCol) ||
         !board.isInsideArray(toRow, toCol))
     {
         return false;
     }
 
-    // Клетки должны быть валидными для геометрии Omega-доски
     if (!board.isValidCell(fromRow, fromCol) ||
         !board.isValidCell(toRow, toCol))
     {
@@ -466,11 +622,10 @@ bool GameController::applyMoveOnBoard(const Move &move)
     Piece fromPiece = board.pieceAt(fromRow, fromCol);
     if (fromPiece.isEmpty())
     {
-        // С пустой клетки ходить нельзя
         return false;
     }
 
-    // Ходить можно только своей фигурой
+    // Ходим только своей фигурой
     if ((m_currentPlayer == Player::White && fromPiece.color != PieceColor::White) ||
         (m_currentPlayer == Player::Black && fromPiece.color != PieceColor::Black))
     {
@@ -479,7 +634,7 @@ bool GameController::applyMoveOnBoard(const Move &move)
 
     Piece toPiece = board.pieceAt(toRow, toCol);
 
-    // Нельзя рубить свою фигуру
+    // Нельзя бить свою фигуру
     if (!toPiece.isEmpty() && toPiece.color == fromPiece.color)
     {
         return false;
@@ -487,20 +642,82 @@ bool GameController::applyMoveOnBoard(const Move &move)
 
     const bool isCapture = !toPiece.isEmpty();
 
-    // Нельзя "снимать" короля противника — партия должна заканчиваться матом.
+    // Нельзя "снимать" короля противника
     if (isCapture && toPiece.kind == PieceKind::King)
     {
         return false;
     }
 
-    // НОВОЕ: проверяем шаблоны ходов по типу фигуры
+    // --- Специальный случай: рокировка ---
+    if (fromPiece.kind == PieceKind::King &&
+        !fromPiece.hasMoved &&
+        fromRow == toRow &&
+        !isCapture &&
+        std::abs(toCol - fromCol) == 2)
+    {
+        const int dir = (toCol > fromCol) ? 1 : -1;      // +1: рокировка на "королевский" фланг, -1: на "ферзевый"
+        const int midCol = fromCol + dir;
+
+        // Ищем ладью в нужную сторону: первая фигура на линии должна быть ладьёй того же цвета, ещё не ходившей
+        int rookCol = -1;
+        int c = fromCol + dir;
+        while (board.isInsideArray(fromRow, c) && board.isValidCell(fromRow, c))
+        {
+            if (!board.isEmpty(fromRow, c))
+            {
+                Piece rp = board.pieceAt(fromRow, c);
+                if (rp.kind == PieceKind::Rook &&
+                    rp.color == fromPiece.color &&
+                    !rp.hasMoved)
+                {
+                    rookCol = c;
+                }
+                break; // встретили первую фигуру на пути — дальше искать нельзя
+            }
+            c += dir;
+        }
+
+        if (rookCol == -1)
+        {
+            return false; // ладья не найдена или между королём и ладьёй стоит другая фигура
+        }
+
+        // Должен быть именно ход короля на две клетки к ладье
+        if ((toCol - fromCol) != 2 * dir)
+        {
+            return false;
+        }
+
+        // Проверка атакованных полей: исходное, промежуточное и конечное поле короля не должны быть под боем
+        Player enemy = opposite(m_currentPlayer);
+        if (isSquareAttacked(fromRow, fromCol, enemy) ||
+            isSquareAttacked(fromRow, midCol, enemy)  ||
+            isSquareAttacked(fromRow, toCol,  enemy))
+        {
+            return false;
+        }
+
+        // Выполняем рокировку:
+        // 1) переносим короля
+        board.clearCell(fromRow, fromCol);
+        fromPiece.hasMoved = true;
+        board.setPieceAt(toRow, toCol, fromPiece);
+
+        // 2) переносим ладью рядом с королём
+        Piece rookPiece = board.pieceAt(fromRow, rookCol);
+        board.clearCell(fromRow, rookCol);
+        rookPiece.hasMoved = true;
+        const int rookDestCol = toCol - dir;  // король и ладья оказываются рядом
+        board.setPieceAt(fromRow, rookDestCol, rookPiece);
+
+        return true;
+    }
+
+    // --- Обычный ход (не рокировка) ---
     if (!pieceCanMove(board, fromPiece, fromRow, fromCol, toRow, toCol, isCapture))
     {
         return false;
     }
-
-    // На этом уровне ход считается псевдолегальным (по типу фигуры).
-    // Проверка "сам себе шах" выполняется в makeMove() через isKingInCheck().
 
     fromPiece.hasMoved = true;
     board.setPieceAt(toRow, toCol, fromPiece);
